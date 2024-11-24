@@ -2,23 +2,29 @@ import cv2
 import numpy as np
 
 def draw_rectangle(event, x, y, flags, param):
-    global ix, iy, drawing, roi_list
+    global ix, iy, drawing, roi_list, display_width, display_height
+
+    # Convert display coordinates to original image coordinates
+    x_orig = int(x * img.shape[1] / display_width)
+    y_orig = int(y * img.shape[0] / display_height)
 
     if event == cv2.EVENT_LBUTTONDOWN:
         drawing = True
-        ix, iy = x, y
+        ix, iy = x_orig, y_orig
 
     elif event == cv2.EVENT_MOUSEMOVE:
         if drawing:
             img_copy = img.copy()
-            cv2.rectangle(img_copy, (ix, iy), (x, y), (0, 255, 0), 2)
-            cv2.imshow('image', img_copy)
+            cv2.rectangle(img_copy, (ix, iy), (x_orig, y_orig), (0, 255, 0), 2)
+            resized_img = cv2.resize(img_copy, (display_width, display_height))
+            cv2.imshow('image', resized_img)
 
     elif event == cv2.EVENT_LBUTTONUP:
         drawing = False
-        cv2.rectangle(img, (ix, iy), (x, y), (0, 255, 0), 2)
-        roi_list.append((ix, iy, x, y))
-        cv2.imshow('image', img)
+        cv2.rectangle(img, (ix, iy), (x_orig, y_orig), (0, 255, 0), 2)
+        roi_list.append((ix, iy, x_orig, y_orig))
+        resized_img = cv2.resize(img, (display_width, display_height))
+        cv2.imshow('image', resized_img)
 
 def find_black_borders(roi):
     x1, y1, x2, y2 = roi
@@ -38,21 +44,39 @@ def find_black_borders(roi):
 
     return (min_x, min_y, max_x, max_y)
 
+def update_display_size():
+    global display_width, display_height
+    _, _, w, h = cv2.getWindowImageRect('image')
+    aspect_ratio = img.shape[1] / img.shape[0]
+    if w / h > aspect_ratio:
+        display_height = h
+        display_width = int(h * aspect_ratio)
+    else:
+        display_width = w
+        display_height = int(w / aspect_ratio)
+    resized_img = cv2.resize(img, (display_width, display_height))
+    cv2.imshow('image', resized_img)
+
 def main():
-    global img, drawing, roi_list
-    img = cv2.imread('1.jpg')
+    global img, drawing, roi_list, display_width, display_height
+    img = cv2.imread('2.jpg')
     if img is None:
         print("Error: Could not load image.")
         return
 
     drawing = False
     roi_list = []
+    center_points = []
 
-    cv2.namedWindow('image')
+    # Set the initial display size
+    display_width = 800
+    display_height = int(display_width * img.shape[0] / img.shape[1])
+
+    cv2.namedWindow('image', cv2.WINDOW_NORMAL)
     cv2.setMouseCallback('image', draw_rectangle)
 
     while True:
-        cv2.imshow('image', img)
+        update_display_size()
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
@@ -61,17 +85,28 @@ def main():
 
     for roi in roi_list:
         black_border = find_black_borders(roi)
+        center_x = (black_border[0] + black_border[2]) // 2
+        center_y = (black_border[1] + black_border[3]) // 2
+        center_points.append((center_x, center_y))
         print(f"Black border coordinates for ROI {roi}: ({black_border[0]}, {black_border[1]}, {black_border[2]}, {black_border[3]})")
+        print(f"Center coordinates: ({center_x}, {center_y})")
         cv2.rectangle(img, (black_border[0], black_border[1]), (black_border[2], black_border[3]), (0, 0, 255), 2)
+        cv2.circle(img, (center_x, center_y), 5, (255, 0, 0), -1)
 
+    if len(center_points) == 4:
+        min_x = min(point[0] for point in center_points)
+        min_y = min(point[1] for point in center_points)
+        max_x = max(point[0] for point in center_points)
+        max_y = max(point[1] for point in center_points)
+
+        cropped_img = img[min_y:max_y, min_x:max_x]
+        resized_img = cv2.resize(cropped_img, (4961,3508))
+        cv2.imwrite('2_exc.jpg', resized_img)
+
+    cv2.namedWindow('Final Image', cv2.WINDOW_NORMAL)
     cv2.imshow('Final Image', img)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
-
-    # for i, roi in enumerate(roi_list):
-    #     black_border = find_black_borders(roi)
-    #     cropped_img = img[black_border[1]:black_border[3], black_border[0]:black_border[2]]
-    #     cv2.imwrite(f'cropped_image_{i}.jpg', cropped_img)
 
 if __name__ == "__main__":
     main()

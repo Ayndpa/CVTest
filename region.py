@@ -59,7 +59,7 @@ def update_display_size():
 
 def main():
     global img, drawing, roi_list, display_width, display_height
-    img = cv2.imread('2.jpg')
+    img = cv2.imread('1.jpg')
     if img is None:
         print("Error: Could not load image.")
         return
@@ -94,14 +94,27 @@ def main():
         cv2.circle(img, (center_x, center_y), 5, (255, 0, 0), -1)
 
     if len(center_points) == 4:
+        # Sort points to get consistent order: top-left, top-right, bottom-right, bottom-left
+        center_points = sorted(center_points, key=lambda p: (p[1], p[0]))
+        if center_points[0][0] > center_points[1][0]:
+            center_points[0], center_points[1] = center_points[1], center_points[0]
+        if center_points[2][0] < center_points[3][0]:
+            center_points[2], center_points[3] = center_points[3], center_points[2]
+
+        pts1 = np.float32(center_points)
+        pts2 = np.float32([[0, 0], [img.shape[1], 0], [img.shape[1], img.shape[0]], [0, img.shape[0]]])
+
+        M = cv2.getPerspectiveTransform(pts1, pts2)
+        img = cv2.warpPerspective(img, M, (img.shape[1], img.shape[0]))
+
         min_x = min(point[0] for point in center_points)
         min_y = min(point[1] for point in center_points)
         max_x = max(point[0] for point in center_points)
         max_y = max(point[1] for point in center_points)
 
         cropped_img = img[min_y:max_y, min_x:max_x]
-        resized_img = cv2.resize(cropped_img, (4961,3508))
-        cv2.imwrite('2_exc.jpg', resized_img)
+        resized_img = cv2.resize(img, (4961,3508))
+        cv2.imwrite('1_exc.jpg', resized_img)
 
     cv2.namedWindow('Final Image', cv2.WINDOW_NORMAL)
     cv2.imshow('Final Image', img)

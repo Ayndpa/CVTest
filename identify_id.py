@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from pyzbar.pyzbar import decode
 import glob
+import os
 
 drawing = False
 ix, iy = -1, -1
@@ -56,7 +57,7 @@ def recognize_barcode(image, roi):
 
 def main():
     global img, drawing, roi_list, display_width, display_height
-    img = cv2.imread('1_exc.jpg')
+    img = cv2.imread('trimimage/1_exc.jpg')
     if img is None:
         print("Error: Could not load image.")
         return
@@ -87,16 +88,22 @@ def main():
     barcode_info = recognize_barcode(img, roi_list[0])
     print(f"1_exc.jpg中的准考证号为：{barcode_info}")
 
-    # 识别其他*_exc.jpg文件中的条形码信息
-    for file in glob.glob('*_exc.jpg'):
-        if file == '1_exc.jpg':
-            continue
+    # 创建testok文件夹
+    if not os.path.exists('testok'):
+        os.makedirs('testok')
+
+    # 识别其他*_exc.jpg文件中的条形码信息并另存
+    for file in glob.glob('trimimage/*_exc.jpg'):
+        # if file == '1_exc.jpg':
+        #     continue
         img = cv2.imread(file)
         if img is None:
             print(f"Error: Could not load image {file}.")
             continue
         barcode_info = recognize_barcode(img, roi_list[0])
         print(f"{file}中的准考证号为：{barcode_info}")
+        new_filename = os.path.join('testok', f"{barcode_info}.jpg")
+        cv2.imwrite(new_filename, img)
 
 if __name__ == "__main__":
     main()

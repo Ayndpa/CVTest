@@ -59,7 +59,7 @@ def update_display_size():
 
 def main():
     global img, drawing, roi_list, display_width, display_height
-    img = cv2.imread('3.jpg')
+    img = cv2.imread('rawimage/3.jpg')
     if img is None:
         print("Error: Could not load image.")
         return
@@ -114,11 +114,11 @@ def main():
 
         cropped_img = img[min_y:max_y, min_x:max_x]
         resized_img = cv2.resize(img, (4961,3508))
-        cv2.imwrite('3_exc.jpg', resized_img)
+        cv2.imwrite('trimimage/3_exc.jpg', resized_img)
 
-    cv2.namedWindow('Final Image', cv2.WINDOW_NORMAL)
-    cv2.imshow('Final Image', img)
-    cv2.waitKey(0)
+    # cv2.namedWindow('Final Image', cv2.WINDOW_NORMAL)
+    # cv2.imshow('Final Image', img)
+    # cv2.waitKey(0)
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":

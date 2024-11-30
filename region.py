@@ -9,12 +9,17 @@ display_width = 800  # 显示窗口的宽度
 display_height = 0  # 显示窗口的高度
 img = None  # 当前图像
 first_img_rois = []  # 第一张图像的ROI列表
+reference_pts2 = None  # 标准目标四点
+output_size = (4961, 3508)  # 输出图像的尺寸 (宽, 高)
+is_reference_processed = False  # 标记是否已处理参考图像
 
 
 def draw_rectangle(event, x, y, flags, param):
-    global ix, iy, drawing, roi_list, display_width, display_height
+    global ix, iy, drawing, roi_list, display_width, display_height, img
 
     # 将显示坐标转换为原始图像坐标
+    if display_height == 0:
+        return  # 防止除以零
     x_orig = int(x * img.shape[1] / display_width)
     y_orig = int(y * img.shape[0] / display_height)
 
@@ -65,9 +70,14 @@ def find_black_borders(roi):
 
 def update_display_size():
     global display_width, display_height, img
-    _, _, w, h = cv2.getWindowImageRect('image')
-    if w < 1: w = 1
-    if h < 1: h = 1
+    try:
+        _, _, w, h = cv2.getWindowImageRect('image')
+    except:
+        w, h = display_width, display_height  # 默认值
+    if w < 1:
+        w = 1
+    if h < 1:
+        h = 1
 
     aspect_ratio = img.shape[1] / img.shape[0]
     if w / h > aspect_ratio:
@@ -80,8 +90,29 @@ def update_display_size():
     cv2.imshow('image', resized_img)
 
 
-def process_image(img_path, use_first_rois=False):
+def sort_points(pts):
+    """
+    按顺序排列四个点：左上、右上、右下、左下
+    """
+    rect = np.zeros((4, 2), dtype="float32")
+
+    # 将点按照它们的和进行排序
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]  # 左上
+    rect[2] = pts[np.argmax(s)]  # 右下
+
+    # 计算差值并排序
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # 右上
+    rect[3] = pts[np.argmax(diff)]  # 左下
+
+    return rect
+
+
+def process_image(img_path, img_files, use_first_rois=False):
     global img, drawing, roi_list, display_width, display_height, first_img_rois
+    global reference_pts2, is_reference_processed, sorted_center_points_ref
+
     img = cv2.imread(img_path)
     if img is None:
         print(f"Error: Could not load image {img_path}.")
@@ -98,58 +129,89 @@ def process_image(img_path, use_first_rois=False):
     cv2.setMouseCallback('image', draw_rectangle)
 
     if not use_first_rois:
+        print(f"请在参考图像 {img_path} 上选择4个ROI并按 'q' 键确认。")
         while True:
             update_display_size()
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
+                if len(roi_list) != 4:
+                    print("请确保选择了4个ROI。")
+                    continue
                 break
         first_img_rois = roi_list.copy()
     else:
-        roi_list = first_img_rois
+        roi_list = first_img_rois.copy()
 
     cv2.destroyAllWindows()
 
     black_borders_list = []  # 用于存储黑块的坐标
 
-    for roi in roi_list:
+    for idx, roi in enumerate(roi_list):
         black_border = find_black_borders(roi)
         black_borders_list.append(black_border)  # 保存每个ROI的黑边坐标
-        center_x = (black_border[0] + black_border[2]) // 2
-        center_y = (black_border[1] + black_border[3]) // 2
+        center_x = (black_border[0] + black_border[2]) / 2
+        center_y = (black_border[1] + black_border[3]) / 2
         print(
-            f"Black border coordinates for ROI {roi}: ({black_border[0]}, {black_border[1]}, {black_border[2]}, {black_border[3]})")
+            f"Image: {os.path.basename(img_path)}, ROI {idx + 1} Black border coordinates: ({black_border[0]}, {black_border[1]}, {black_border[2]}, {black_border[3]})")
         print(f"Center coordinates: ({center_x}, {center_y})")
         cv2.rectangle(img, (black_border[0], black_border[1]), (black_border[2], black_border[3]), (0, 0, 255), 2)
-        cv2.circle(img, (center_x, center_y), 5, (255, 0, 0), -1)
+        cv2.circle(img, (int(center_x), int(center_y)), 5, (255, 0, 0), -1)
 
+    # 如果有四个ROI，进行透视变换
     if len(roi_list) == 4:
-        # 对点进行排序以获得一致的顺序：左上，右上，右下，左下
-        center_points = [(black_border[0] + (black_border[2] - black_border[0]) // 2,
-                          black_border[1] + (black_border[3] - black_border[1]) // 2) for black_border in
-                         black_borders_list]
-        center_points = sorted(center_points, key=lambda p: (p[1], p[0]))
-        if center_points[0][0] > center_points[1][0]:
-            center_points[0], center_points[1] = center_points[1], center_points[0]
-        if center_points[2][0] < center_points[3][0]:
-            center_points[2], center_points[3] = center_points[3], center_points[2]
+        # 计算每个ROI的中心点
+        center_points = [((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2) for bb in black_borders_list]
+        center_points = np.array(center_points, dtype="float32")
 
-        # 计算裁切区域
-        min_x = min(point[0] for point in center_points)
-        min_y = min(point[1] for point in center_points)
-        max_x = max(point[0] for point in center_points)
-        max_y = max(point[1] for point in center_points)
+        # 按顺序排列点
+        sorted_center_points = sort_points(center_points)
 
-        pts1 = np.float32(center_points)
-        pts2 = np.float32([[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]])
+        if not use_first_rois:
+            # 对参考图像，定义目标点pts2为标准尺寸的四个角
+            reference_pts2 = np.array([
+                [0, 0],
+                [output_size[0] - 1, 0],
+                [output_size[0] - 1, output_size[1] - 1],
+                [0, output_size[1] - 1]
+            ], dtype="float32")
+            # 计算透视变换矩阵
+            M = cv2.getPerspectiveTransform(sorted_center_points, reference_pts2)
+            # 应用透视变换
+            corrected_img = cv2.warpPerspective(img, M, output_size)
+            # 保存对齐后的参考图像
+            filename = os.path.basename(img_path)
+            cv2.imwrite(os.path.join('trimimage', filename), corrected_img)
+            print(f"参考图像 {filename} 已保存到 'trimimage' 目录。")
+            is_reference_processed = True
+            sorted_center_points_ref = sorted_center_points
+        else:
+            if not is_reference_processed:
+                print("参考图像尚未处理，请先处理参考图像。")
+                return
 
-        M = cv2.getPerspectiveTransform(pts1, pts2)
-        corrected_img = cv2.warpPerspective(img, M, (img.shape[1], img.shape[0]))
+            # 使用参考图像的中心点和当前图像的中心点来计算变换
+            M = cv2.getPerspectiveTransform(sorted_center_points, sorted_center_points_ref)
+            # 获取参考图像，应用透视变换到参考图像上，以匹配当前图像的视角
+            ref_img_path = img_files[0]
+            ref_img = cv2.imread(ref_img_path)
 
-        cropped_img = corrected_img[min_y:max_y, min_x:max_x]
+            # 进行两次透视变换，以达到与参考图片相同的变换。
+            warped_ref_img = cv2.warpPerspective(ref_img, M, output_size)
 
-        resized_img = cv2.resize(cropped_img, (4961, 3508))
-        filename = os.path.basename(img_path)
-        cv2.imwrite(f'trimimage/{filename}', resized_img)
+            # 对已经进行一次变换的参考图像再次进行透视变换，获得变换矩阵M2
+            M2 = cv2.getPerspectiveTransform(sorted_center_points_ref, reference_pts2)
+            warped_ref_img = cv2.warpPerspective(warped_ref_img, M2, output_size)
+
+            # 使用参考图像经过两次变换后的变换矩阵对当前图像进行变换
+            corrected_img = cv2.warpPerspective(img, M, output_size)
+            corrected_img = cv2.warpPerspective(corrected_img, M2, output_size)
+
+            # 保存对齐后的图像
+            filename = os.path.basename(img_path)
+            cv2.imwrite(os.path.join('trimimage', filename), corrected_img)
+            print(f"图像 {filename} 已对齐并保存到 'trimimage' 目录。")
+    else:
+        print(f"图像 {img_path} 未检测到4个ROI，跳过对齐。")
 
 
 def main():
@@ -159,14 +221,19 @@ def main():
 
     # 获取rawimage目录中所有图像文件的列表
     img_dir = 'rawimage'
-    img_files = [os.path.join(img_dir, f) for f in os.listdir(img_dir) if f.endswith('.jpg') or f.endswith('.png')]
+    img_files = [os.path.join(img_dir, f) for f in os.listdir(img_dir) if
+                 f.lower().endswith('.jpg') or f.lower().endswith('.png')]
+
+    if not img_files:
+        print("rawimage目录中没有找到图像文件。")
+        return
 
     # 处理第一张图像以选择ROI
-    process_image(img_files[0])
+    process_image(img_files[0], img_files=img_files, use_first_rois=False)
 
     # 使用相同的ROI处理其余图像
     for img_file in img_files[1:]:
-        process_image(img_file, use_first_rois=True)
+        process_image(img_file, img_files=img_files, use_first_rois=True)
 
 
 if __name__ == "__main__":
